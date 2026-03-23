@@ -10,15 +10,11 @@
 1. **确定目标目录**：
    - 无参数 → 使用当前工作目录
    - 有参数 → 在用户文件系统中搜索匹配的目录，找到后确认
-2. **生成骨架**：在目标目录下运行 `python ~/.claude/skills/mapc/scripts/repo2mindmap.py`（脚本内置于本 skill，无需额外安装）
+2. **生成骨架**：在目标目录下运行本 skill 自带的 `scripts/repo2mindmap.py`（纯 Python 标准库，无需 pip install）
+   - 脚本位于本 SKILL.md 同级的 `scripts/` 目录下，请根据当前系统自动定位完整路径
 3. 读取生成的 MINDMAP.md
 4. 按下方规范，分 Session 补全所有节点的"作用 / 输入 / 输出"以及类描述、文件描述
 5. 用户输入数字（如 `1`）推进到下一个 Session
-
-**生成骨架的命令**：
-```bash
-cd <目标目录> && python ~/.claude/skills/mapc/scripts/repo2mindmap.py
-```
 
 ---
 
