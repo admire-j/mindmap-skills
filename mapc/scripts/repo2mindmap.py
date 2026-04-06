@@ -113,8 +113,8 @@ def _list_tree(root_dir: str, targets: List[str], ignore: Set[str], valid_ext: S
 # ---------- 代码解析与分类 ----------
 class PyInfo:
     def __init__(self):
-        self.classes: List[str] = []
-        self.funcs: List[str] = []
+        self.classes: List[Tuple[str, List[str]]] = []   # [(class_name, [method_names])]
+        self.funcs: List[str] = []                        # module-level functions only
         self.vars_cfg: List[str] = []
         self.has_main_guard: bool = False
         self.imports: Set[str] = set()
@@ -134,7 +134,6 @@ def _parse_python_file_abs(abs_path: str, cfg: MindmapConfig) -> PyInfo:
     # main 守卫
     for n in getattr(tree, "body", []):
         if isinstance(n, ast.If):
-            # if __name__ == "__main__": ...
             try:
                 cond = ast.unparse(n.test) if hasattr(ast, "unparse") else ""
             except Exception:
@@ -143,11 +142,17 @@ def _parse_python_file_abs(abs_path: str, cfg: MindmapConfig) -> PyInfo:
                 info.has_main_guard = True
                 break
 
-    for n in ast.walk(tree):
+    # 顶层遍历：类(含方法)、模块级函数、import
+    for n in getattr(tree, "body", []):
         if isinstance(n, ast.ClassDef):
-            info.classes.append(n.name)
-        elif isinstance(n, ast.FunctionDef) and not n.name.startswith("_"):
-            info.funcs.append(n.name)
+            methods = []
+            for item in n.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    methods.append(item.name)
+            info.classes.append((n.name, methods))
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not n.name.startswith("_"):
+                info.funcs.append(n.name)
         elif isinstance(n, ast.Import):
             for a in n.names: info.imports.add(a.name)
         elif isinstance(n, ast.ImportFrom):
@@ -169,9 +174,9 @@ def _parse_python_file_abs(abs_path: str, cfg: MindmapConfig) -> PyInfo:
                 if name.startswith("_"): continue
                 if (name.isupper()) or name.lower().endswith("_cfg") or ("Cfg" in name or "CFG" in name):
                     cfg_like.append(name)
-    info.classes = sorted(set(info.classes))[:cfg.max_classes]
-    info.funcs   = sorted(set(info.funcs))[:cfg.max_funcs]
-    info.vars_cfg= sorted(set(cfg_like))[:cfg.max_vars]
+    info.classes  = info.classes[:cfg.max_classes]
+    info.funcs    = list(dict.fromkeys(info.funcs))[:cfg.max_funcs]
+    info.vars_cfg = sorted(set(cfg_like))[:cfg.max_vars]
     return info
 
 def _classify_file(rel_path: str, info: Optional[PyInfo]) -> str:
@@ -300,14 +305,17 @@ def generate_mindmap(config: MindmapConfig) -> str:
                 file_link = f"[{file_styled}]({rel_path})"
                 lines.append(f"{base_indent}- {file_link}")
 
-                # 子项：每个类 / 函数独立为一个分支
+                # 子项：类(含方法) + 模块级函数，各自独立分支
                 if ext == ".py" and pyinfo and show_py_children:
                     csz, cwt = STYLE['class']
                     cclr = config.colors['class']
-                    for c in pyinfo.classes:
-                        lines.append(f"{base_indent}  - {_styled(config.emoji['class']+' '+c, size=csz, weight=cwt, color=cclr)}")
                     ksz, kwt = STYLE['func']
                     kclr = config.colors['func']
+                    for class_name, methods in pyinfo.classes:
+                        lines.append(f"{base_indent}  - {_styled(config.emoji['class']+' '+class_name, size=csz, weight=cwt, color=cclr)}")
+                        for m in methods:
+                            lines.append(f"{base_indent}    - {_styled(config.emoji['func']+' '+m, size=ksz, weight=kwt, color=kclr)}")
+                    # 模块级函数（不属于任何类）
                     for fn in pyinfo.funcs:
                         lines.append(f"{base_indent}  - {_styled(config.emoji['func']+' '+fn, size=ksz, weight=kwt, color=kclr)}")
                     if config.show_cfg_vars and pyinfo.vars_cfg:
@@ -347,5 +355,7 @@ def write_html(config: MindmapConfig, markdown_text: Optional[str]=None) -> str:
 
 # ---------- 直接运行（可选） ----------
 if __name__ == "__main__":
-    cfg = MindmapConfig(root_dir=".", expand_all=True)
+    import sys
+    root = sys.argv[1] if len(sys.argv) > 1 else "."
+    cfg = MindmapConfig(root_dir=root, expand_all=True)
     print("Writing:", write_markdown(cfg))
