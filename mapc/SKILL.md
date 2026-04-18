@@ -1,7 +1,13 @@
+---
+name: mapc
+description: "mapc — 代码仓库思维导图。为代码仓库生成结构化 markmap 思维导图。默认对当前目录或用户指定目录生成骨架 + LLM 补描述；--evolution 模式额外生成早/中期骨架图对照演化。"
+---
+
 # mapc — 代码仓库思维导图
 
 > 为代码仓库生成结构化思维导图（markmap 格式）。
 > 触发方式：`/mapc`（当前目录）或 `/mapc 目标描述`（如 `/mapc parkour那个项目`）
+> 特别模式：`/mapc --evolution`（额外生成早/中期骨架图，详见第 10 节）
 
 ---
 
@@ -231,3 +237,94 @@ span[style*="color:#C586C0"] { font-size:11px; }
 | 入口层 (G0) | Surface |
 | API 层 (G1) | Service |
 | 内部层 (G2) | Core |
+
+---
+
+### 10 ｜Evolution 模式（`--evolution`）
+
+**触发**：用户输入 `/mapc --evolution` 或 `/mapc --evolution 目标描述`。
+
+**目的**：在正常 `/mapc` 产物之外，**额外**生成早/中期的骨架思维导图，让用户看清项目是**怎么长起来的**。早/中期骨架没有被后期 feature 淹没，核心抽象一目了然。
+
+**核心思想**：
+- 早/中期图**只出骨架**（纯 AST，零 LLM 成本），用来干净地看那个时间点的结构
+- 当前版本仍走完整流程（骨架 + LLM Session 补描述），是主产物
+- 三张图并排对照，不需要颜色标注演化 —— 用户自己扫结构差异即可
+
+#### 前置检查
+
+1. **必须是 git 仓库**：若不是，提示用户并退回普通 `/mapc`
+2. **提交数 ≥ 10**：`git rev-list --count HEAD` 太少时不值得，建议直接普通模式
+3. **工作区干净**：有未提交变更时提示用户（worktree 机制不会影响主工作区，但提醒为好）
+
+#### 工作流
+
+1. **选 3 个代表性 commit**（早 / 中 / 当前）：
+   - 读取 `git log --oneline --stat`、`git tag`、顶层目录出现时间
+   - 按「核心架构确立 / 功能显著扩张 / 当前 HEAD」三个阶段挑 commit
+   - 告诉用户选择结果和理由，让用户可以修正或确认
+
+2. **结构差异预检**（决定是否跳过早/中期骨架）：
+
+   对每个候选 commit 计算「结构签名」：
+   - 顶层目录集合：`git ls-tree --name-only <hash> | grep -v '^\.' | sort`（只取目录+非隐藏）
+   - 有效文件数：`git ls-tree -r <hash> | awk '{print $4}' | grep -E '\.(py|cpp|cc|hpp|h|md|toml|yaml|yml|json|ini)$' | wc -l`
+
+   判断规则（每个阶段独立判断，独立跳过）：
+
+   | 阶段 | 跳过条件 |
+   |---|---|
+   | 早期 | 顶层目录集合 == 当前 **AND** 文件数 / 当前文件数 ≥ **0.8** |
+   | 中期 | 顶层目录集合 == 当前 **AND** 文件数 / 当前文件数 ≥ **0.9** |
+
+   - 跳过时明确告知用户原因，例如：「早期版本已有 N 文件，与当前 M 文件结构高度重叠（顶层目录一致、占比 85%），跳过 `MINDMAP_early.md` 生成」
+   - 如果**两个阶段都被跳过**：告知用户「此仓库结构演化幅度小，evolution 模式价值有限」，询问是否继续（继续 = 只生成当前版本主图，等同默认 `/mapc`）
+
+3. **在主仓库里记录当前分支**（用于后续参考，无需 checkout）：
+   ```bash
+   MAIN_REPO=$(pwd)
+   REPO_NAME=$(basename "$MAIN_REPO")
+   ```
+
+4. **为未被跳过的阶段创建独立 worktree**（不影响主目录）：
+   ```bash
+   git worktree add "/tmp/${REPO_NAME}-early" <early_hash>
+   git worktree add "/tmp/${REPO_NAME}-mid"   <mid_hash>
+   ```
+
+5. **在各 worktree 运行 `repo2mindmap.py`**（纯 AST，秒出）：
+   ```bash
+   python <skill_dir>/scripts/repo2mindmap.py "/tmp/${REPO_NAME}-early"
+   python <skill_dir>/scripts/repo2mindmap.py "/tmp/${REPO_NAME}-mid"
+   ```
+   脚本会把 `MINDMAP.md` 写到传入目录下。
+
+6. **把骨架图拷回主仓库并重命名**：
+   ```bash
+   cp "/tmp/${REPO_NAME}-early/MINDMAP.md" "$MAIN_REPO/MINDMAP_early.md"
+   cp "/tmp/${REPO_NAME}-mid/MINDMAP.md"   "$MAIN_REPO/MINDMAP_mid.md"
+   ```
+
+7. **当前版本走完整 `/mapc` 流程**（见第 7 节的 Session 工作流），产出 `MINDMAP.md`
+
+8. **清理 worktree**（只清理实际创建的）：
+   ```bash
+   git worktree remove "/tmp/${REPO_NAME}-early"
+   git worktree remove "/tmp/${REPO_NAME}-mid"
+   ```
+
+#### 产物
+
+| 文件 | 内容 | 生成方式 |
+|---|---|---|
+| `MINDMAP_early.md` | 早期骨架图 | 纯 AST，无描述 |
+| `MINDMAP_mid.md`   | 中期骨架图 | 纯 AST，无描述 |
+| `MINDMAP.md`       | 当前版本深度图 | AST + LLM Session 补描述（主产物） |
+
+用户打开 `MINDMAP.md` 深读当前版本；需要看演化时切到 `MINDMAP_early.md` / `MINDMAP_mid.md` 作参照。
+
+#### 成本
+
+- 比普通 `/mapc` 多 1 次 LLM 调用（选 commit 时的 git log 分析，可合并到第一步对话里）
+- 多 2 次 `repo2mindmap.py` 运行（纯 Python AST，秒级）
+- 多 2 次 `git worktree add` + `remove`（本地磁盘操作，秒级）
